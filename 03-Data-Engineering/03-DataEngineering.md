@@ -273,5 +273,199 @@ extract_table_to_pandas("customer", db_engine)
 ## Transform
 e.g. Splitting the email address with pandas
 
+```python
+customer_df # Pandas DataFrame with customer data
+
+# split email column into 2 columns on the '@' character
+split_email = customer_df.email.str.split('@', expand=True)
+
+# create 2 new columns using split_email
+customer_df = customer_df.assign(
+    username=split_email[0]
+    domain=split_email[1]
+)
+```
+
+### Extract using PySpark:
+```python
+import pyspark.sql
+
+spark = pyspark.sql.SparkSession.builder.getOrCreate()
+
+# Read a table:
+spark.read.jdbc('jdbc:postgresql://localhost:5432/pagila',
+'customer', # table name
+properties={'user':'repl', 'password':'password'})
+```
+### Transform using PySpark
+Join Tables on the rating column
+```python
+# PySpark, not Pandas!
+customer_df # PySpark DataFrame with customer data
+ratings_df  #PySpark DataFrame with ratings data
+
+# Group by ratings:
+ratings_per_customer = ratings_df.groupBy('customer_id').mean('rating')
+
+# Join on customer ID
+customer_df.join(
+    ratings_per_customer, 
+    # "on" clause in the join: column to join on:
+    customer_df.customer_id == ratings_per_customer.customer_id
+)
+```
+
 ## Load
+
+"By storing data per column, it's faster to loop over these specific columns to resolve a query"
+
+MPP
+- Amazon RedShift
+- Azure SQL Data Warehouse
+- Google BigQuery
+
+MPP load data better from columnar storage format, e.g. parquet, not CSV
+
+```
+# Pandas DF .to_parquet() method
+df.to_parquet('./s3://path/to/bucket/customer.parquet')
+# PySpark DF .write.parquet() method
+df.write.parquet('./s3://path/to/bucket/customer.parquet')
+```
+
+```
+COPY customer
+FROM 's3://path/to/bucket/customer.parquet'
+FORMAT as parquet
+```
+
+### load to PostgreSQL
+
+```python
+pandas.to_sql()
+```
+
+```python
+# Transformation on data
+recommendations = transform_find_recommendations(ratings_df)
+
+# Load the transformed data into PostgreSQL:
+recommendations.to_sql('recommendations',
+            db_engine,
+            schema='store',
+            if_exists='replace')
+```
+
+```python
+# Exercise: Load into Postgres:
+connection_uri = "postgresql://repl:password@localhost:5432/dwh"
+db_engine_dwh = sqlalchemy.create_engine(connection_uri)
+
+# Transformation step, join with recommendations data
+film_pdf_joined = film_pdf.join(recommendations)
+
+film_pdf_joined.to_sql("film", 
+db_engine_dwh,
+schema="store",
+if_exists="replace")
+
+# Run the query to fetch the data
+pd.read_sql("SELECT film_id, recommended_film_ids FROM store.film", db_engine_dwh)
+```
+
 ## Summary
+
+Clean ETF function!
+
+e.g.
+```python
+# Extract function:
+def extract_table_to_df(tablename, db_engine):
+    return pd.read_sql('SELECT * FROM {}'.format(tablename), db_engine)
+
+# Transforms:
+def split_columns_transform(df, column, pat, suffixes):
+    # something
+
+def load_df_into_dwh(film_df, tablename, schema, db_engine):
+    return pd.to_sql(tablename, db_engine, schema=schema, if_exists='replace')
+
+db_engines = {} # Configured...
+
+def etl():
+    # Extract
+    film_df = extract_table_to_df('film', db_engines['store'])
+    # Transform
+    film_df = split_columns_transform(film_df, 'rental_rate', '.', ['_dollar', '_cents'])
+    # Load
+    load_df_into_dwh(film_df, 'film', 'store', db_engines['dwh'])
+```
+
+Now, need to schedule (airflow):
+
+```python
+from airflow.models import DAG
+
+from airflow.operators.python_operator import PythonOperator
+
+dag = DAG(dag_id = 'etl_pipeline', ..., schedule_interval = '0 0 * * *')
+
+etl_task = PythonOperator(task_id='etl_task', python_callable=etl, dag=dag)
+
+# etl_task waits for "wait_for_this_task" to be finished
+etl_task.set_upstream(wait_for_this_task)
+```
+
+Save DAG definition into a `*.py` file, place under `~/airflow/dags/`
+
+Anatomy of a cron expression:
+- minute
+- hour
+- day of the month
+- month
+- day of the week
+
+
+## Setting up Airflow:
+Move `dag.py` file to the folder defined in `airflow.cfg` under `dags_folder`
+
+
+# DataCamp Case Study
+
+## Querying the table
+```python
+# Complete the connection URI
+connection_uri = "postgresql://repl:password@localhost:5432/datacamp_application"
+db_engine = sqlalchemy.create_engine(connection_uri)
+
+# Get user with id 4387
+user1 = pd.read_sql("SELECT * FROM rating where user_id = 4387", db_engine)
+
+# Get user with id 18163
+user2 = pd.read_sql("SELECT * FROM rating where user_id = 18163", db_engine)
+
+# Get user with id 8770
+user3 = pd.read_sql("SELECT * FROM rating where user_id = 8770", db_engine)
+
+# Use the helper function to compare the 3 users
+print_user_comparison(user1, user2, user3)
+```
+
+# Average rating per course:
+```python
+# Complete the transformation function
+def transform_avg_rating(rating_data):
+    # Group by course_id and extract average rating per course
+    avg_rating = rating_data.groupby('course_id').rating.mean()
+    # Return sorted average ratings per course
+    sort_rating = avg_rating.sort_values(ascending=False).reset_index()
+    return sort_rating
+
+# Extract the rating data into a DataFrame    
+rating_data = extract_rating_data(db_engines)
+
+# Use transform_avg_rating on the extracted data and print results
+avg_rating_data = transform_avg_rating(rating_data)
+print(avg_rating_data) 
+```
+
