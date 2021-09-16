@@ -469,3 +469,76 @@ avg_rating_data = transform_avg_rating(rating_data)
 print(avg_rating_data) 
 ```
 
+## Recommendations:
+
+```python
+def etl(db_engines):
+    # Extract the data
+    courses = extract_course_data(db_engines)
+    rating = extract_rating_data(db_engines)
+    # Clean up courses data
+    courses = transform_fill_programming_language(courses)
+    # Get the average course ratings
+    avg_course_rating = transform_avg_rating(rating)
+    # Get eligible user and course ID pairs
+    courses_to_recommend = transform_courses_to_recommend(rating, courses)
+    # Calculate the recommendations
+    recommendations = transform_recommendations(avg_course_rating, courses_to_recommend)
+    # Load the recommendations into the database
+    load_to_dwh(recommendations, db_engine)
+```
+
+### Creating the DAG
+```python
+from airflow.models import DAG
+from airflow.operators.python_operator import PythonOperator
+
+dag = DAG(dag_id = "recommendations", scheduled_interval = "0 0 * * *")
+task_recommendations = PythonOperator(task_id = "recommendations_task", python_callable=etl)
+```
+
+### Inserting recommendations into the target table, 'recommendations'
+```python
+connection_uri = "postgresql://repl:password@localhost:5432/dwh"
+db_engine = sqlalchemy.create_engine(connection_uri)
+
+def load_to_dwh(recommendations):
+    recommendations.to_sql("recommendations", db_engine, if_exists="replace")
+```
+
+### Define the DAG
+
+```python
+# Define the DAG so it runs on a daily basis
+dag = DAG(dag_id="recommendations",
+          schedule_interval="0 0 * * *")
+
+# Make sure `etl()` is called in the operator. Pass the correct kwargs.
+# etl() takes db_engines as argument, it is passed in kwargs
+task_recommendations = PythonOperator(
+    task_id="recommendations_task",
+    python_callable=etl,
+    op_kwargs={"db_engines": db_engines},
+)
+```
+
+### Querying the recommendations
+```python
+def recommendations_for_user(user_id, threshold=4.5):
+    # Join with the courses table
+    query = """
+    SELECT title, rating FROM recommendations
+    INNER JOIN courses ON courses.course_id = recommendations.course_id
+    WHERE user_id=%(user_id)s AND rating>%(threshold)s
+    ORDER BY rating DESC
+    """
+    # Add the threshold parameter
+    predictions_df = pd.read_sql(query, db_engine, params = {"user_id": user_id, 
+                                                             "threshold": threshold})
+    return predictions_df.title.values
+
+# Try the function you created
+print(recommendations_for_user(12, 4.65))
+```
+
+## Recap
